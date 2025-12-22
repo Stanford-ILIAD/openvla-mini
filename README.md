@@ -326,7 +326,7 @@ If you run into any issues, please visit the [VLA Troubleshooting](#vla-troubles
 
 ### Converting Prismatic Models to Hugging Face
 
-**NOTE: Converting and deploying MiniVLA models and VQ / multi image is not supported yet!**
+**NOTE: Converting and deploying VQ is not supported yet!**
 
 If you have used the Prismatic VLMs codebase to train your model (e.g., if you did full fine-tuning of OpenVLA on a
 new dataset), you will need to convert the final checkpoint to a version that is compatible with Hugging Face

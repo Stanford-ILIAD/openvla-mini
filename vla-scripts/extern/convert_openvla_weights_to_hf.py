@@ -161,20 +161,57 @@ def convert_openvla_weights_to_hf(cfg: HFConvertConfig) -> None:
 
     # Instantiate & Add Pad to Tokenizer =>> following `prismatic.models.materialize.get_llm_backbone_and_tokenizer`
     #   TODO (siddk) :: Implement batched generation -- in which case this should set `padding_side = "left"`!
+    padding_side = "right"
     print("[*] Instantiating and Patching Tokenizer, LLM Config")
     tokenizer = AutoTokenizer.from_pretrained(
-        hf_config.hf_llm_id, model_max_length=hf_config.llm_max_length, token=cfg.hf_token, padding_side="right"
+        hf_config.hf_llm_id, 
+        model_max_length=hf_config.llm_max_length, 
+        token=cfg.hf_token, 
+        padding_side=padding_side
     )
+    
+    # Handle Extra Tokens (Generic Check)
+    if str(hf_config.llm_backbone_id).endswith("-extra"):
+        num_extra_tokens = 256
+        added = tokenizer.add_tokens([f"<|extra_{i}|>" for i in range(num_extra_tokens)])
+        print(f"Added {added} extra tokens to tokenizer for {hf_config.llm_backbone_id}.")
+    
+    # Add PAD Token
     tokenizer.add_special_tokens({"pad_token": "<PAD>"})
-    tokenizer.init_kwargs.pop("add_prefix_space", None)  # Pop to prevent unnecessary warning on reload...
-    assert tokenizer.pad_token_id == hf_config.pad_token_id, "Incorrect Pad Token ID!"
-    assert len(tokenizer) > hf_config.text_config.vocab_size, "Tokenizer vocabulary must be larger than LLM vocabulary!"
-
-    # Patch LLM Config in `hf_config` with vocab_size (+ `hf_config.pad_to_multiple_of`), pad_token_id + validate
-    hf_config.text_config.vocab_size += hf_config.pad_to_multiple_of
+    tokenizer.init_kwargs.pop("add_prefix_space", None)
+    
+    # Sync pad_token_id
+    hf_config.pad_token_id = tokenizer.pad_token_id
     hf_config.text_config.pad_token_id = hf_config.pad_token_id
-    hf_config.text_config.torch_dtype = torch.bfloat16
-    assert hf_config.text_config.use_cache, "LLM config `use_cache` should be True for inference (set default)!"
+    assert tokenizer.pad_token_id == hf_config.pad_token_id, "Incorrect Pad Token ID!"
+
+    # Config Loading
+    from transformers import AutoConfig
+    base_llm_config = AutoConfig.from_pretrained(hf_config.hf_llm_id, token=cfg.hf_token)
+    
+    # Update text_config with actual architecture values
+    hf_config.text_config.hidden_size = base_llm_config.hidden_size
+    hf_config.text_config.num_attention_heads = base_llm_config.num_attention_heads
+    hf_config.text_config.num_hidden_layers = base_llm_config.num_hidden_layers
+    hf_config.text_config.intermediate_size = base_llm_config.intermediate_size
+    
+    # Qwen2.5 specific: handle GQA params
+    if hasattr(base_llm_config, 'num_key_value_heads'):
+        hf_config.text_config.num_key_value_heads = base_llm_config.num_key_value_heads
+    else:
+        hf_config.text_config.num_key_value_heads = base_llm_config.num_attention_heads
+    
+    # Set use_cache for inference
+    hf_config.text_config.use_cache = True
+    
+    # Vocab Size Alignment (Crucial for Prismatic compatibility)
+    vocab_size = len(tokenizer)
+    pad_to_multiple_of = 64
+    if vocab_size % pad_to_multiple_of != 0:
+        vocab_size = ((vocab_size + pad_to_multiple_of - 1) // pad_to_multiple_of) * pad_to_multiple_of
+    
+    hf_config.text_config.vocab_size = vocab_size
+    print(f"Tokenizer vocab_size aligned to: {vocab_size}")
 
     # Create Vision Backbone & Transform =>> following `prismatic.models.materialize.get_vision_backbone_and_transform`
     #   =>> Deviates a bit from existing code; as such, explicitly tested in `tests/test_image_transforms.py`
